@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+backup/
+results/*.ckpt.jsonl
+.venv/
+.ipynb_checkpoints/
+~$*.docx
