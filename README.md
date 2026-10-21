@@ -72,6 +72,8 @@ How much does the choice of the shared exponent matter, and does it change which
 
 On all 256 columns the class-rule / opt numbers reproduce the team table (E2M3 3.079 / 3.058, MXINT6 4.047 / 3.896, E3M2 5.439 / 5.236, E4M1 11.088 / 10.176); D1 BFP6 under the class rule is 3.464.
 
+**Which BFP6:** the BFP6 in this section is the team definition 16|4|5 (blocks of 16, 4-bit shared exponent clamped to [-8, 7], sign + 5-bit magnitude, exponent floor(log2 max)), implemented in `scale_opt.py`. `formats.py` still has the older BFP6 (blocks of 32, `ceil` rule, numerically identical to MXINT6 under `ceil`), so `run_baseline.py` and `FORMATS_API.md` report different BFP6 numbers (4.047 / 4.168 / 3.896 on all columns) until `formats.py` is updated.
+
 - **Gain of `opt` over the class rule (held-out):** E3M2 3.9%, E2M3 0.8%, E4M1 8.2%, MXINT6 2.9%, BFP6 1.3%. In % points with paired-bootstrap 95% intervals over the held-out columns: E2M3 +0.024 [+0.014, +0.035], MXINT6 +0.116 [+0.074, +0.154], BFP6 +0.046 [+0.019, +0.073], E3M2 +0.212 [+0.176, +0.248], E4M1 +0.911 [+0.802, +1.022]. All exclude 0.
 - **The ranking never changes:** E2M3 < BFP6 < MXINT6 < E3M2 < E4M1 under all nine policies; the gap between the winner and the runner-up has a 95% interval excluding 0 every time (`opt`: 0.361 [0.304, 0.413]).
 - **A wider window does not help:** `opt_wide` and `oracle_w` (-8..+8) pick exactly the same exponents as `opt`. The searches only use d in {0, +1} for the FP formats and d in {-1, 0, +1} for MXINT6/BFP6; d = -2 is never chosen.
@@ -94,7 +96,7 @@ Block max a, E = floor(log2 a), mantissa of the max m = a / 2^E in [1, 2). The c
    | MXINT6 | 0.0402 | 0.0607 | +0.8836 | +0.9041 (hurts) |
    | BFP6 16\|4\|5 | 0.0549 | 0.0909 | +0.6680 | +0.7040 (hurts) |
 
-   This is why `ceil` helps E3M2/E4M1 and hurts E2M3/MXINT6/BFP6. It also explains why E4M1 with vmax 384, 192 or 256 gives identical results under `ceil` (10.237%): when nothing clips and nothing is subnormal, the FP scale choice is irrelevant.
+   This is why `ceil` helps E3M2/E4M1 and hurts E2M3/MXINT6/BFP6. It also explains why E4M1 with vmax 384, 192 or 256 gives the same held-out error under `ceil` (10.237%): when nothing clips, only weights in the subnormal range can quantize differently, and E4M1 has almost none (a handful of tiny weights differ).
 4. **The integer formats prefer a smaller scale (d = -1):** every step halves but the clip level drops to (31/32) * 2^E. With one weight above it and uniform rounding noise, d = -1 wins when (m - 31/32)^2 < 2^-8 ((N - 1)/16 + 1/12), N = block size, i.e. m < m*. MXINT6: m* = 1.058, predicted 32 blocks, observed 27. BFP6: m* = 1.032, predicted 32, observed 31. For FP formats d = -1 buys nothing for normal weights, so it is never chosen.
 
 ![Clipping vs resolution](figures/fig5_scale_tradeoff.png)
