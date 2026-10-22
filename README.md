@@ -39,14 +39,16 @@ docstring at the top of `formats.py`.
 How much does the choice of the shared exponent matter, and does it change which format wins?
 
 ### Run
-    python3 test_scale_opt.py       # 12 tests, including the two hand examples below
-    python3 scale_study.py          # cross-check + all tables -> results/scale_study.md, results/scale_study_C.csv,
-                                    # figure -> figures/fig5_scale_tradeoff.png  (about 15 s)
-    python3 scale_study.py --data <folder>   # every W_<tag>.npy in the folder (with X_cal.npy), e.g. datasets A-E
+    python3 test_scale_opt.py       # 15 tests, including the two hand examples below
+    python3 scale_study.py          # cross-check + all tables -> results/scale_study.md, results/scale_study_<tag>.csv,
+                                    # figure -> figures/fig5_scale_tradeoff.png  (about 15 s for C)
+    python3 scale_study.py --npz assignment_data.npz   # datasets A-E from the course file (W_A ... W_E, X_cal)
+
+Without `--npz`, the course file is looked up like `run_all.py` does (`$CS611_DATA`, then `data/assignment_data.npz`); if it is missing, only C is studied. `run_all.py` runs `scale_study.py` automatically when the file exists.
 
 ### Files
-- `scale_opt.py`: independent implementation of the shared-exponent policies. It does not import `formats.py`, and it uses a different method on purpose (grid lookup for rounding, `frexp` for floor(log2), `ceil` derived as e_ocp or e_ocp + 1), so it can cross-check `formats.py`. It includes D1 BFP6 (16|4|5, 4-bit exponent clamped to [-8, 7]) and the E4M1 one-NaN variant.
-- `test_scale_opt.py`: unit tests (grids, RNE ties, -0, exact floor(log2), clamps, tail block, policy properties, hand examples).
+- `scale_opt.py`: independent implementation of the shared-exponent policies. It does not import `formats.py`, and it uses a different method on purpose (grid lookup for rounding, `ceil` derived as e_ocp or e_ocp + 1 by checking which elements would clip), so it can cross-check `formats.py`. It has the five candidates (BFP6 = 16|4|5, 4-bit exponent clamped to [-8, 7]) and the variants of `formats.py` v2 under the same names: `MXFP6_E4M1_v192`, `MXFP6_E4M1_nan1`, `BFP6_g32e8`, `BFP6_b32_ceil`, `MXINT6_tc`. Its counters use the Lecture 19 definitions: `n_range` (out of range before rounding) and `n_saturated` (the rounded value is beyond vmax).
+- `test_scale_opt.py`: unit tests (grids, RNE ties, -0, exact floor(log2), range vs saturated, two's complement, clamps, tail block, policy properties, hand examples).
 - `scale_study.py`: the study; every number below comes from `results/scale_study.md`.
 
 ### Policies compared
@@ -54,7 +56,7 @@ How much does the choice of the shared exponent matter, and does it change which
 |---|---|---|
 | `ocp` | class floor rule, e = floor(log2 max) - emax | 1 |
 | `ceil` | smallest power-of-two scale that clips nothing | 1 |
-| `opt` | per block try e_ocp + {-2, -1, 0, +1}, keep lowest weight SSE | 4 |
+| `opt` | per block try e_ocp (clamped to the exponent field) + {-2, -1, 0, +1}, keep lowest weight SSE | 4 |
 | `opt_wide` / `oracle_w` | same with -3..+2 / -8..+8 | 6 / 17 |
 | `model` | same window, error predicted without rounding (exact clip/flush, step^2/12 otherwise) | 0 |
 | `opt_out` | window -2..+1, output-aware r^T H_bb r, H from the even (fit) columns | 4 |
@@ -72,7 +74,11 @@ How much does the choice of the shared exponent matter, and does it change which
 
 On all 256 columns the class-rule / opt numbers reproduce the team table (E2M3 3.079 / 3.058, MXINT6 4.047 / 3.896, E3M2 5.439 / 5.236, E4M1 11.088 / 10.176); D1 BFP6 under the class rule is 3.464.
 
-**Which BFP6:** the BFP6 in this section is the team definition 16|4|5 (blocks of 16, 4-bit shared exponent clamped to [-8, 7], sign + 5-bit magnitude, exponent floor(log2 max)), implemented in `scale_opt.py`. `formats.py` still has the older BFP6 (blocks of 32, `ceil` rule, numerically identical to MXINT6 under `ceil`), so `run_baseline.py` and `FORMATS_API.md` report different BFP6 numbers (4.047 / 4.168 / 3.896 on all columns) until `formats.py` is updated.
+**Which BFP6:** the BFP6 in this section is the team definition 16|4|5 (blocks of 16, 4-bit shared exponent clamped to [-8, 7], sign + 5-bit magnitude, exponent floor(log2 max)). `formats.py` v2 (branch `akash/formats-v2`) has the same BFP6 and matches `scale_opt.py` bit-for-bit; `formats.py` v1 had the older block-32 `ceil` version (now the variant `BFP6_b32_ceil`, numerically MXINT6 under `ceil`: 4.047 / 4.168 / 3.896 on all columns).
+
+**Variants, held-out Y error % (ocp / ceil / opt):** E4M1 one-NaN (vmax 256) 20.662 / 10.237 / 10.237; E4M1 v192 11.149 / 10.237 / 10.237; BFP6 32|8|5 and the v1 BFP6 4.054 / 4.174 / 3.938 (= MXINT6); MXINT6 two's complement 4.054 / 4.160 / 3.880.
+
+**MXINT6 symmetric vs two's complement (D10) is a scale-search effect.** Under the class rule the extra code -32 is almost never reached (4.054 for both). Under `opt` two's complement is better (3.880 vs 3.938): at d = -1 a negative block maximum clips at -2^E instead of -(31/32) 2^E, so shrinking the scale costs less. Two's complement shrinks the scale in 35 blocks instead of 27, and the 8 extra blocks all have a negative maximum (21 vs 13).
 
 - **Gain of `opt` over the class rule (held-out):** E3M2 3.9%, E2M3 0.8%, E4M1 8.2%, MXINT6 2.9%, BFP6 1.3%. In % points with paired-bootstrap 95% intervals over the held-out columns: E2M3 +0.024 [+0.014, +0.035], MXINT6 +0.116 [+0.074, +0.154], BFP6 +0.046 [+0.019, +0.073], E3M2 +0.212 [+0.176, +0.248], E4M1 +0.911 [+0.802, +1.022]. All exclude 0.
 - **The ranking never changes:** E2M3 < BFP6 < MXINT6 < E3M2 < E4M1 under all nine policies; the gap between the winner and the runner-up has a 95% interval excluding 0 every time (`opt`: 0.361 [0.304, 0.413]).
@@ -106,10 +112,15 @@ Block max a, E = floor(log2 a), mantissa of the max m = a / 2^E in [1, 2). The c
 - **E2M3**, x = [3.9, 0.3, -0.2, 0.1, 1.3, -0.7, 0.45, 2.2], class exponent e = -1 clips 3.9 to 3.75. SSE at e = -1 / 0: 0.028750 / **0.025625**. The normal weights 1.3 and 2.2 quantize identically at both exponents; only the weights that become subnormal (0.3, -0.2, -0.7, 0.45) get coarser.
 
 ### Cross-check of `formats.py`
-0 differing elements across 7 matrices (W_C, Gaussian, Laplace, Student-t, 70% sparse, rows scaled 1e+-6, FP32 maxima at and just below powers of two) for E3M2, E2M3, E4M1, MXINT6, E4M1_v192 and the current BFP6, under ocp, ceil, opt, opt with H and the +-3 search. D1 BFP6 matches `formats.py`'s MXINT6 with block=16 bit-for-bit where the 4-bit clamp cannot bind. Edge case: `np.floor(np.log2(a))` rounds up for a float64 a few ulps below a power of two (a = 7.999999999999999 gives E2M3 exponent 1 instead of 0); it cannot happen for FP32 data (0 of 253 powers of two), so no result changes; `np.frexp(a)[1] - 1` is exact.
+Against `formats.py` v2 (branch `akash/formats-v2`, 22 Oct): 0 differing elements across 7 matrices (W_C, Gaussian, Laplace, Student-t, 70% sparse, rows scaled 1e+-6, FP32 maxima at and just below powers of two) for the five candidates (BFP6 = 16|4|5) and the variants E4M1_v192, E4M1_nan1, BFP6_g32e8, BFP6_b32_ceil and MXINT6_tc, under ocp, ceil, opt, opt with H and the +-3 search, with one explained exception below. The counters `n_range`, `n_saturated` and `n_zeroed` on W_C agree with v2's stats in 29 of 30 format/policy cases (the exception again). The numbers in v2's tables T1, T3, T4 and T6 for dataset C are the same as here.
+
+Findings of the cross-check:
+1. `np.floor(np.log2(a))` rounds up for a float64 a few ulps below a power of two (a = 7.999999999999999 gave E2M3 exponent 1 instead of 0). It cannot happen for FP32 data (0 of 253 powers of two), so no result changed; fixed in `formats.py` with `np.frexp(a)[1] - 1` (commit 32530fa). `predictor.py` still uses `np.floor(np.log2(...))`, which is harmless on FP32 data.
+2. When the BFP6 4-bit exponent clamp binds, the two implementations searched different exponents: v2 clamps the class-rule exponent first and searches around the clamped value; `scale_opt.py` searched around the unclamped value and then clamped, so the search collapsed to one candidate. Found with the output-aware search on rows scaled down to 1e-6; `scale_opt.py` now follows v2. Never matters on C (the clamp never binds there).
+3. Open, for Akash: for `MXINT6_tc` under `ceil`, v2 moves the scale up whenever the block max exceeds (31/16) 2^e, whatever its sign. A negative maximum down to -2 * 2^e fits the code -32, so nothing clips; `scale_opt.py` keeps the lower scale (held-out 4.160 here). Only the `ceil` row of this variant is affected; T8 reports ocp and opt, which agree.
 
 ### Limitations
-- Only dataset C so far; A-E need the course data (`--data`).
+- Only dataset C so far; A-E need the course file (`--npz assignment_data.npz`).
 - The bootstrap resamples X columns with W fixed: it shows stability to the choice of input columns, not to a different W.
 - `model` and the m* rule assume uniform rounding noise (step^2/12).
 - The output-aware conclusions rely on X_cal being nearly white; a strongly correlated X_test could change them.

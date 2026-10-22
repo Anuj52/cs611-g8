@@ -1,8 +1,12 @@
 """Scale-optimization study (Anuj): how much does the choice of shared exponent matter?
 
-  python scale_study.py                  # dataset C from data/
+  python scale_study.py                  # datasets A-E if the course file is found, else C from data/
+  python scale_study.py --npz assignment_data.npz    # the course file: W_A ... W_E and X_cal
   python scale_study.py --data DIR       # every W_<tag>.npy in DIR (with X_<tag>.npy or X_cal.npy)
   python scale_study.py --no-figure      # skip matplotlib
+
+The course file is looked up like run_all.py does: --npz / --data, then $CS611_DATA, then
+data/assignment_data.npz; without it only dataset C (data/W_C.npy) is studied.
 
 Writes results/scale_study.md (every table; generated, do not edit by hand),
 results/scale_study_<tag>.csv and figures/fig5_scale_tradeoff.png.
@@ -12,7 +16,6 @@ import argparse
 import csv
 import glob
 import os
-import time
 
 import numpy as np
 
@@ -23,8 +26,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CANDIDATES = list(S.FMTS)
 EXTRA = list(S.VARIANTS)
 SHORT = {"MXFP6_E3M2": "E3M2", "MXFP6_E2M3": "E2M3", "MXFP6_E4M1": "E4M1", "MXINT6": "MXINT6",
-         "BFP6": "BFP6 16|4|5", "MXFP6_E4M1_v192": "E4M1 v192", "MXFP6_E4M1_nan256": "E4M1 one-NaN",
-         "BFP6_b32ceil": "BFP6 32 ceil (old)"}
+         "BFP6": "BFP6 16|4|5", "MXFP6_E4M1_v192": "E4M1 v192", "MXFP6_E4M1_nan1": "E4M1 one-NaN",
+         "BFP6_g32e8": "BFP6 32|8|5 (= MXINT6)", "BFP6_b32_ceil": "BFP6 32 ceil (v1)",
+         "MXINT6_tc": "MXINT6 two's compl."}
 POLICIES = [  # name, how, roundings per weight, what it is
     ("ocp", "class floor rule", 1),
     ("ceil", "smallest scale that clips nothing", 1),
@@ -40,7 +44,18 @@ POLICIES = [  # name, how, roundings per weight, what it is
 
 # --------------------------------------------------------------------------- data
 def load_datasets(data_dir):
+    """W_<tag> matrices with their X: from a folder of .npy files or one .npz (the course file)."""
     out = {}
+    if os.path.isfile(data_dir) and data_dir.endswith(".npz"):
+        d = np.load(data_dir)
+        for key in sorted(k for k in d.files if k.startswith("W_")):
+            tag = key[2:]
+            xk = next((x for x in (f"X_{tag}", f"X_cal_{tag}", "X_cal") if x in d.files), None)
+            if xk:
+                out[tag] = (d[key].astype(np.float64), d[xk].astype(np.float64))
+        if not out:
+            raise SystemExit(f"no W_<tag> array with an X_cal found in {data_dir}")
+        return out
     for path in sorted(glob.glob(os.path.join(data_dir, "W_*.npy"))):
         tag = os.path.basename(path)[2:-4]
         for xn in (f"X_{tag}.npy", f"X_cal_{tag}.npy", "X_cal.npy"):
@@ -112,12 +127,15 @@ def crosscheck(datasets, md):
     H_of = {f"W_{t}": X @ X.T for t, (_, X) in datasets.items()}
 
     # (mine, formats.py name, block override, exponents compared up to a constant offset)
-    pairs = [(n, n, None, False) for n in ["MXFP6_E3M2", "MXFP6_E2M3", "MXFP6_E4M1", "MXINT6", "MXFP6_E4M1_v192"]]
-    pairs += [("BFP6_b32ceil", "BFP6", None, True),       # formats.py's BFP6 today (block 32)
-              ("BFP6", "BFP6", None, True),               # should match once D1 lands in formats.py
-              ("BFP6", "MXINT6", 16, False)]              # D1 BFP6 = MXINT6 grid in blocks of 16
-    if "MXFP6_E4M1_nan256" in getattr(F, "VARIANTS", {}):
-        pairs.append(("MXFP6_E4M1_nan256", "MXFP6_E4M1_nan256", None, False))
+    v2 = getattr(F, "FORMATS_VERSION", "v1") != "v1"
+    repo_names = set(F.FORMATS) | set(getattr(F, "VARIANTS", {}))
+    pairs = []
+    for n in CANDIDATES + EXTRA:
+        repo = "BFP6" if (n == "BFP6_b32_ceil" and not v2) else n    # v1 called the old BFP6 "BFP6"
+        if (n == "BFP6" and not v2) or repo not in repo_names:
+            continue
+        pairs.append((n, repo, None, n.startswith("BFP")))
+    pairs.append(("BFP6", "MXINT6", 16, False))         # D1 BFP6 = MXINT6 grid in blocks of 16
     checks = [("ocp", dict(policy="ocp"), dict(policy="ocp")),
               ("ceil", dict(policy="ceil"), dict(policy="ceil")),
               ("opt", dict(policy="opt"), dict(policy="opt")),
@@ -152,18 +170,47 @@ def crosscheck(datasets, md):
                     d = (ea - eb)[live]
                     same_e += bool(d.size == 0 or (np.all(d == d[0]) if shifted else np.all(d == 0)))
                 n_diff += int((a != b).sum())
-            if (mine, repo) != ("BFP6", "BFP6"):
+            if not (mine == "MXINT6_tc" and label == "ceil"):      # explained below the table
                 n_bad += n_diff
             md.append(f"| {mine} | {repo}{'' if blk is None else f' block={blk}'} | {label} | {n_mat} | "
                       f"{same_q}/{n_mat} | {same_e}/{n_mat} | {n_diff} |")
     md.append("")
-    md.append("Exponents are compared on non-zero blocks (an all-zero block gets exponent 0 in both); for the BFP "
-              "rows only up to a constant offset, because formats.py stores the exponent of the integer code "
-              "(4 lower than mine). Today formats.py's `BFP6` is the old block-32 version, so `BFP6_b32ceil` must "
-              "match it and the D1 row `BFP6 | BFP6` is expected to differ; when Akash's D1 version lands the two "
-              "swap. Until then D1 is checked against formats.py's MXINT6 grid with block=16, on the matrices "
-              "where the 4-bit exponent clamp [-8, 7] cannot bind (every block exponent at least 3 from the "
-              "limits). The 'differing elements' total printed by the script leaves out the expected D1 row.\n")
+    md.append(f"formats.py version: {getattr(F, 'FORMATS_VERSION', 'v1')}. Exponents are compared on non-zero "
+              "blocks (an all-zero block gets exponent 0 in both); for the BFP rows only up to a constant offset "
+              "(formats.py v1 stored the exponent of the integer code, 4 lower than mine; v2 stores the same E). "
+              "The `BFP6 | MXINT6 block=16` rows skip matrices where the 4-bit exponent clamp [-8, 7] could bind "
+              "(every block exponent must be at least 3 from the limits), because MXINT6 has no 4-bit clamp."
+              + ("" if v2 else " formats.py v1 has no D1 BFP6, so that is the only check of it here.") + "\n")
+    tc_ceil = [r for r in md if r.startswith("| MXINT6_tc | MXINT6_tc | ceil |")]
+    if tc_ceil and not tc_ceil[0].endswith("| 0 |"):
+        md.append("**MXINT6_tc under `ceil` differs on purpose.** formats.py's `ceil` moves the scale up whenever "
+                  "amax > (31/16) 2^e, whatever the sign of the maximum. For two's complement a negative maximum "
+                  "down to -2 * 2^e is representable (code -32), so nothing clips and `scale_opt.py` keeps the lower "
+                  "scale. The class-rule and `opt` rows, the only ones the tables use, agree. This row is left out of "
+                  "the 'differing elements' total the script prints.\n")
+
+    # the counters (Lecture 19 definitions), only in formats.py v2
+    if v2:
+        Wc = mats["W_C"] if "W_C" in mats else next(iter(mats.values()))
+        agree, total = 0, 0
+        bad = []
+        for mine, repo, blk, _ in pairs:
+            if blk is not None:
+                continue
+            for pol in ("ocp", "ceil", "opt"):
+                a, ea = S.quantize(Wc, mine, pol)
+                st = F.quantize(Wc, repo, policy=pol, return_stats=True)[2]
+                p = S.error_parts(Wc, a, ea, mine)
+                mine_c = (p["n_range"], p["n_saturated"], p["n_zero"])
+                repo_c = (st["n_range"], st["n_saturated"], st["n_zeroed"])
+                total += 1
+                agree += mine_c == repo_c
+                if mine_c != repo_c:
+                    bad.append(f"{mine} {pol}: mine {mine_c} vs formats.py {repo_c}")
+        md.append(f"Counters on `{'W_C' if 'W_C' in mats else 'the first matrix'}` (n_range = out of range before "
+                  "rounding, n_saturated = rounded value beyond vmax, n_zeroed), compared with formats.py v2's "
+                  f"stats for every pair above under ocp, ceil and opt: {agree}/{total} identical"
+                  + (". Differences: " + "; ".join(bad) if bad else "") + ".\n")
 
     # the log2 edge case: float64 values a few ulps below 2^k
     x = float(np.nextafter(8.0, 0))
@@ -173,12 +220,20 @@ def crosscheck(datasets, md):
     ks = [k for k in range(-126, 127) if np.floor(np.log2(np.nextafter(2.0 ** k, 0))) != k - 1]
     f32 = [k for k in range(-126, 127)
            if np.floor(np.log2(np.float64(np.nextafter(np.float32(2.0 ** k), np.float32(0))))) != k - 1]
-    md.append("**Edge case found (float64 input only).** `np.floor(np.log2(a))` rounds up when `a` is a float64 a "
-              f"few ulps below a power of two: for a = nextafter(8, 0) = {x!r}, formats.py gives the E2M3 block "
-              f"exponent {eF:.0f} where the class rule floor(log2 a) - 2 gives {eS}. This happens for {len(ks)} of "
-              f"253 powers of two in float64 and for {len(f32)} when the value is the FP32 number just below 2^k, "
-              "so it cannot change any result on the (FP32) course data. `np.frexp(a)[1] - 1` is exact. "
-              "predictor.py uses the same expression.\n")
+    pred_src = open(os.path.join(HERE, "predictor.py"), encoding="utf-8").read() \
+        if os.path.exists(os.path.join(HERE, "predictor.py")) else ""
+    pred_note = (" predictor.py still uses `np.floor(np.log2(...))` (harmless on FP32 data)."
+                 if "np.floor(np.log2(" in pred_src else "")
+    md.append("**Edge case (float64 input only).** `np.floor(np.log2(a))` rounds up when `a` is a float64 a few ulps "
+              f"below a power of two; this happens for {len(ks)} of 253 powers of two in float64 and for {len(f32)} "
+              "when the value is the FP32 number just below 2^k, so it cannot change any result on the (FP32) course "
+              "data. `np.frexp(a)[1] - 1` is exact. ")
+    if eF == eS:
+        md[-1] += (f"formats.py now handles it: for a = nextafter(8, 0) = {x!r} it gives the E2M3 block exponent "
+                   f"{eF:.0f}, as the class rule floor(log2 a) - 2 does." + pred_note + "\n")
+    else:
+        md[-1] += (f"For a = nextafter(8, 0) = {x!r}, formats.py gives the E2M3 block exponent {eF:.0f} where the "
+                   f"class rule floor(log2 a) - 2 gives {eS}." + pred_note + "\n")
     return n_bad
 
 
@@ -187,7 +242,6 @@ def study(tag, W, X, md, csv_rows):
     X_fit, X_eval = F.split_X(X)
     H_fit, H_eval = X_fit @ X_fit.T, X_eval @ X_eval.T
     res = {}
-    t0 = time.perf_counter()
     for name in CANDIDATES + EXTRA:
         for pol, _, _ in POLICIES:
             if name in EXTRA and pol not in ("ocp", "ceil", "opt"):
@@ -196,14 +250,13 @@ def study(tag, W, X, md, csv_rows):
             parts = S.error_parts(W, Wq, e, name)
             res[name, pol] = dict(Wq=Wq, e=e, y_ho=S.rel_err(W, Wq, X_eval), y_fit=S.rel_err(W, Wq, X_fit),
                                   y_all=S.rel_err(W, Wq, X), w=S.rel_err(W, Wq), **parts)
-    secs = time.perf_counter() - t0
 
     w = W.ravel()
     kurt = ((w - w.mean()) ** 4).mean() / w.var() ** 2
     md.append(f"## 2. Dataset {tag}\n")
     md.append(f"W {W.shape[0]}x{W.shape[1]}, X_cal {X.shape[0]}x{X.shape[1]} (fit on the {X_fit.shape[1]} even "
               f"columns, held out: the {X_eval.shape[1]} odd columns). std {w.std():.3f}, kurtosis {kurt:.2f}, "
-              f"zeros {np.mean(w == 0):.1%}, max |w| {np.abs(w).max():.3f}. All policies ran in {secs:.1f} s.\n")
+              f"zeros {np.mean(w == 0):.1%}, max |w| {np.abs(w).max():.3f}.\n")
 
     # 2a. main table
     md.append(f"### 2a. Relative error of Y = W X on the held-out columns (%), dataset {tag}\n")
@@ -249,20 +302,44 @@ def study(tag, W, X, md, csv_rows):
         md.append(f"| {SHORT[n]} | {S.bits_per_elem(n, W.shape[1]):.2f} | " + " | ".join(
             f"{100 * res[n, p]['y_ho']:.3f}" for p in ("ocp", "ceil", "opt")) + " |")
     md.append("")
+    if "MXINT6_tc" in EXTRA:
+        # two's complement only matters when a NEGATIVE value reaches the extra code -32
+        sign = {}
+        for n in ("MXINT6", "MXINT6_tc"):
+            d = res[n, "opt"]["e"] - res[n, "ocp"]["e"]
+            mx = np.stack([W[np.arange(W.shape[0]), sl.start + np.abs(W[:, sl]).argmax(1)]
+                           for sl in S.block_slices(W.shape[1], 32)], 1)
+            sign[n] = (int((d == -1).sum()), int(((d == -1) & (mx < 0)).sum()))
+        md.append("MXINT6 symmetric vs two's complement (D10): under the class rule the extra code -32 is almost "
+                  f"never reached (held-out {100 * res['MXINT6', 'ocp']['y_ho']:.3f} vs "
+                  f"{100 * res['MXINT6_tc', 'ocp']['y_ho']:.3f}). Under `opt` it matters "
+                  f"({100 * res['MXINT6', 'opt']['y_ho']:.3f} vs {100 * res['MXINT6_tc', 'opt']['y_ho']:.3f}): "
+                  "at d = -1 the clip level for a negative maximum is -2^E instead of -(31/32) 2^E, so shrinking "
+                  f"the scale costs less. Blocks with d = -1 under opt: symmetric {sign['MXINT6'][0]} "
+                  f"({sign['MXINT6'][1]} with a negative maximum), two's complement {sign['MXINT6_tc'][0]} "
+                  f"({sign['MXINT6_tc'][1]} with a negative maximum).\n")
 
     # 2b. ranking + bootstrap
     yev = col_energy(W, W, X_eval)[1]
     md.append(f"### 2b. Does the ranking change with the scale policy? (dataset {tag})\n")
     md.append("Gap = runner-up minus winner, held-out Y error in % points, with a paired bootstrap 95% interval "
-              "over the held-out columns (2000 resamples, seed 0).\n")
-    md.append("| policy | ranking (best first) | gap winner vs runner-up [95% CI] |")
-    md.append("|---|---|---|")
+              "over the held-out columns (2000 resamples, seed 0). Tie rule (D6): if the interval contains 0 the "
+              "top two are a tie; 'identical' = both formats produce exactly the same quantized W.\n")
+    md.append("| policy | ranking (best first) | gap winner vs runner-up [95% CI] | verdict |")
+    md.append("|---|---|---|---|")
     for p, _, _ in POLICIES:
         order = sorted(CANDIDATES, key=lambda n: res[n, p]["y_ho"])
         ea = col_energy(W, res[order[1], p]["Wq"], X_eval)[0]
         eb = col_energy(W, res[order[0], p]["Wq"], X_eval)[0]
         g, lo, hi = boot_diff(ea, eb, yev)
-        md.append(f"| {p} | {' < '.join(SHORT[n] for n in order)} | {g:.3f} [{lo:.3f}, {hi:.3f}] |")
+        if np.array_equal(res[order[0], p]["Wq"], res[order[1], p]["Wq"]):
+            verdict = f"tie, identical ({SHORT[order[0]]} = {SHORT[order[1]]})"
+        elif lo <= 0:
+            verdict = f"tie ({SHORT[order[0]]} / {SHORT[order[1]]})"
+        else:
+            verdict = SHORT[order[0]]
+        res["_verdict", p] = verdict
+        md.append(f"| {p} | {' < '.join(SHORT[n] for n in order)} | {g:.3f} [{lo:.3f}, {hi:.3f}] | {verdict} |")
     md.append("")
     md.append("Gain of each search over the class rule, per format: ocp minus policy, held-out Y error in "
               "% points [95% CI]. Positive = the search helps.\n")
@@ -283,17 +360,20 @@ def study(tag, W, X, md, csv_rows):
 
     # 2c. clipping vs zeroing vs rounding
     md.append(f"### 2c. Where the weight error comes from (dataset {tag})\n")
-    md.append("Share of the squared weight error from clipped (saturated) elements, from non-zero weights "
-              "flushed to 0, and from ordinary rounding; counts of saturated / zeroed weights out of "
-              f"{W.size}.\n")
-    md.append("| format | policy | clip | zero | round | n saturated | n zeroed | W rel err % |")
-    md.append("|---|---|---|---|---|---|---|---|")
+    md.append("Share of the squared weight error from out-of-range (clipped) elements, from non-zero weights "
+              "flushed to 0, and from ordinary rounding. Counts out of "
+              f"{W.size} weights, with the Lecture 19 definitions used by formats.py v2: 'range' = |w|/scale "
+              "beyond vmax before rounding; 'saturated' = the rounded value is beyond vmax, so saturation "
+              "changed it (a value just above vmax that rounds back to vmax is in the first count only).\n")
+    md.append("| format | policy | clip | zero | round | n range | n saturated | n zeroed | W rel err % |")
+    md.append("|---|---|---|---|---|---|---|---|---|")
     for n in CANDIDATES:
         for p in ("ocp", "ceil", "opt"):
             r = res[n, p]
             tot = r["sse_clip"] + r["sse_zero"] + r["sse_round"]
             md.append(f"| {SHORT[n]} | {p} | {r['sse_clip'] / tot:.1%} | {r['sse_zero'] / tot:.1%} | "
-                      f"{r['sse_round'] / tot:.1%} | {r['n_sat']} | {r['n_zero']} | {100 * r['w']:.3f} |")
+                      f"{r['sse_round'] / tot:.1%} | {r['n_range']} | {r['n_saturated']} | {r['n_zero']} | "
+                      f"{100 * r['w']:.3f} |")
     md.append("")
 
     # 2d. clip-zone blocks: bump or not
@@ -399,8 +479,8 @@ def study(tag, W, X, md, csv_rows):
                 continue
             r = res[n, p]
             csv_rows.append(dict(dataset=tag, format=n, policy=p, y_rel_err_heldout=r["y_ho"],
-                                 y_rel_err_fit=r["y_fit"], y_rel_err_all=r["y_all"], w_rel_err=r["w"], n_saturated=r["n_sat"],
-                                 n_zeroed=r["n_zero"], sse_clip=r["sse_clip"], sse_zero=r["sse_zero"],
+                                 y_rel_err_fit=r["y_fit"], y_rel_err_all=r["y_all"], w_rel_err=r["w"],
+                                 n_range=r["n_range"], n_saturated=r["n_saturated"], n_zeroed=r["n_zero"], sse_clip=r["sse_clip"], sse_zero=r["sse_zero"],
                                  sse_round=r["sse_round"], roundings_per_weight=cost,
                                  bits_per_elem=S.bits_per_elem(n, W.shape[1])))
     return res
@@ -450,10 +530,17 @@ def figure(tag, W, res, path):
 # --------------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--data", default=os.path.join(HERE, "data"))
+    ap.add_argument("--data", default=None, help="folder of W_<tag>.npy files, or the course .npz")
+    ap.add_argument("--npz", default=None, help="course assignment_data.npz (W_A ... W_E, X_cal)")
     ap.add_argument("--no-figure", action="store_true")
     args = ap.parse_args()
-    datasets = load_datasets(args.data)
+    source = args.npz or args.data
+    if source is None:
+        for p in (os.environ.get("CS611_DATA"), os.path.join(HERE, "data", "assignment_data.npz")):
+            if p and os.path.exists(p):
+                source = p
+                break
+    datasets = load_datasets(source or os.path.join(HERE, "data"))
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
     os.makedirs(os.path.join(HERE, "figures"), exist_ok=True)
 
@@ -477,12 +564,11 @@ def main():
             for p in pols:
                 md.append(f"| {SHORT[n]} | {p} | " + " | ".join(
                     f"{100 * allres[t][n, p]['y_ho']:.3f}" for t in datasets) + " |")
-        md.append("\nWinner per dataset and policy:\n")
+        md.append("\nWinner per dataset and policy (ties by the D6 rule, see each dataset's section 2b):\n")
         md.append("| policy | " + " | ".join(datasets) + " |")
         md.append("|---|" + "---|" * len(datasets))
         for p in pols:
-            md.append(f"| {p} | " + " | ".join(
-                SHORT[min(CANDIDATES, key=lambda n: allres[t][n, p]["y_ho"])] for t in datasets) + " |")
+            md.append(f"| {p} | " + " | ".join(allres[t]["_verdict", p] for t in datasets) + " |")
         md.append("")
 
     out = os.path.join(HERE, "results", "scale_study.md")

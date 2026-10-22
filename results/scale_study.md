@@ -33,29 +33,24 @@ Matrices: `W_C` 100x100, `gauss` 64x100, `laplace` 64x100, `student_t3` 64x100, 
 | MXFP6_E4M1_v192 | MXFP6_E4M1_v192 | opt | 7 | 7/7 | 7/7 | 0 |
 | MXFP6_E4M1_v192 | MXFP6_E4M1_v192 | opt + H | 7 | 7/7 | 7/7 | 0 |
 | MXFP6_E4M1_v192 | MXFP6_E4M1_v192 | search -3..+3 | 7 | 7/7 | 7/7 | 0 |
-| BFP6_b32ceil | BFP6 | ocp | 7 | 7/7 | 7/7 | 0 |
-| BFP6_b32ceil | BFP6 | ceil | 7 | 7/7 | 7/7 | 0 |
-| BFP6_b32ceil | BFP6 | opt | 7 | 7/7 | 7/7 | 0 |
-| BFP6_b32ceil | BFP6 | opt + H | 7 | 7/7 | 7/7 | 0 |
-| BFP6_b32ceil | BFP6 | search -3..+3 | 7 | 7/7 | 7/7 | 0 |
-| BFP6 | BFP6 | ocp | 7 | 0/7 | 0/7 | 10026 |
-| BFP6 | BFP6 | ceil | 7 | 0/7 | 0/7 | 9717 |
-| BFP6 | BFP6 | opt | 7 | 0/7 | 0/7 | 10280 |
-| BFP6 | BFP6 | opt + H | 7 | 0/7 | 0/7 | 11774 |
-| BFP6 | BFP6 | search -3..+3 | 7 | 0/7 | 0/7 | 10280 |
+| BFP6_b32_ceil | BFP6 | ocp | 7 | 7/7 | 7/7 | 0 |
+| BFP6_b32_ceil | BFP6 | ceil | 7 | 7/7 | 7/7 | 0 |
+| BFP6_b32_ceil | BFP6 | opt | 7 | 7/7 | 7/7 | 0 |
+| BFP6_b32_ceil | BFP6 | opt + H | 7 | 7/7 | 7/7 | 0 |
+| BFP6_b32_ceil | BFP6 | search -3..+3 | 7 | 7/7 | 7/7 | 0 |
 | BFP6 | MXINT6 block=16 | ocp | 3 | 3/3 | 3/3 | 0 |
 | BFP6 | MXINT6 block=16 | ceil | 3 | 3/3 | 3/3 | 0 |
 | BFP6 | MXINT6 block=16 | opt | 3 | 3/3 | 3/3 | 0 |
 | BFP6 | MXINT6 block=16 | opt + H | 3 | 3/3 | 3/3 | 0 |
 | BFP6 | MXINT6 block=16 | search -3..+3 | 3 | 3/3 | 3/3 | 0 |
 
-Exponents are compared on non-zero blocks (an all-zero block gets exponent 0 in both); for the BFP rows only up to a constant offset, because formats.py stores the exponent of the integer code (4 lower than mine). Today formats.py's `BFP6` is the old block-32 version, so `BFP6_b32ceil` must match it and the D1 row `BFP6 | BFP6` is expected to differ; when Akash's D1 version lands the two swap. Until then D1 is checked against formats.py's MXINT6 grid with block=16, on the matrices where the 4-bit exponent clamp [-8, 7] cannot bind (every block exponent at least 3 from the limits). The 'differing elements' total printed by the script leaves out the expected D1 row.
+formats.py version: v1. Exponents are compared on non-zero blocks (an all-zero block gets exponent 0 in both); for the BFP rows only up to a constant offset (formats.py v1 stored the exponent of the integer code, 4 lower than mine; v2 stores the same E). The `BFP6 | MXINT6 block=16` rows skip matrices where the 4-bit exponent clamp [-8, 7] could bind (every block exponent must be at least 3 from the limits), because MXINT6 has no 4-bit clamp. formats.py v1 has no D1 BFP6, so that is the only check of it here.
 
-**Edge case found (float64 input only).** `np.floor(np.log2(a))` rounds up when `a` is a float64 a few ulps below a power of two: for a = nextafter(8, 0) = 7.999999999999999, formats.py gives the E2M3 block exponent 1 where the class rule floor(log2 a) - 2 gives 0. This happens for 249 of 253 powers of two in float64 and for 0 when the value is the FP32 number just below 2^k, so it cannot change any result on the (FP32) course data. `np.frexp(a)[1] - 1` is exact. predictor.py uses the same expression.
+**Edge case (float64 input only).** `np.floor(np.log2(a))` rounds up when `a` is a float64 a few ulps below a power of two; this happens for 249 of 253 powers of two in float64 and for 0 when the value is the FP32 number just below 2^k, so it cannot change any result on the (FP32) course data. `np.frexp(a)[1] - 1` is exact. formats.py now handles it: for a = nextafter(8, 0) = 7.999999999999999 it gives the E2M3 block exponent 0, as the class rule floor(log2 a) - 2 does. predictor.py still uses `np.floor(np.log2(...))` (harmless on FP32 data).
 
 ## 2. Dataset C
 
-W 100x100, X_cal 100x256 (fit on the 128 even columns, held out: the 128 odd columns). std 1.000, kurtosis 5.76, zeros 0.0%, max |w| 5.700. All policies ran in 1.0 s.
+W 100x100, X_cal 100x256 (fit on the 128 even columns, held out: the 128 odd columns). std 1.000, kurtosis 5.76, zeros 0.0%, max |w| 5.700.
 
 ### 2a. Relative error of Y = W X on the held-out columns (%), dataset C
 
@@ -108,23 +103,27 @@ Variants (sensitivity rows, not candidates), held-out Y error %:
 |---|---|---|---|---|
 | E4M1 v192 | 6.32 | 11.149 | 10.237 | 10.237 |
 | E4M1 one-NaN | 6.32 | 20.662 | 10.237 | 10.237 |
-| BFP6 32 ceil (old) | 6.32 | 4.054 | 4.174 | 3.938 |
+| BFP6 32|8|5 (= MXINT6) | 6.32 | 4.054 | 4.174 | 3.938 |
+| BFP6 32 ceil (v1) | 6.32 | 4.054 | 4.174 | 3.938 |
+| MXINT6 two's compl. | 6.32 | 4.054 | 4.160 | 3.880 |
+
+MXINT6 symmetric vs two's complement (D10): under the class rule the extra code -32 is almost never reached (held-out 4.054 vs 4.054). Under `opt` it matters (3.938 vs 3.880): at d = -1 the clip level for a negative maximum is -2^E instead of -(31/32) 2^E, so shrinking the scale costs less. Blocks with d = -1 under opt: symmetric 27 (13 with a negative maximum), two's complement 35 (21 with a negative maximum).
 
 ### 2b. Does the ranking change with the scale policy? (dataset C)
 
-Gap = runner-up minus winner, held-out Y error in % points, with a paired bootstrap 95% interval over the held-out columns (2000 resamples, seed 0).
+Gap = runner-up minus winner, held-out Y error in % points, with a paired bootstrap 95% interval over the held-out columns (2000 resamples, seed 0). Tie rule (D6): if the interval contains 0 the top two are a tie; 'identical' = both formats produce exactly the same quantized W.
 
-| policy | ranking (best first) | gap winner vs runner-up [95% CI] |
-|---|---|---|
-| ocp | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.383 [0.325, 0.440] |
-| ceil | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.465 [0.404, 0.525] |
-| opt | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.361 [0.304, 0.413] |
-| opt_wide | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.361 [0.304, 0.413] |
-| oracle_w | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.361 [0.304, 0.413] |
-| model | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.350 [0.294, 0.403] |
-| opt_out | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.357 [0.300, 0.410] |
-| oracle_y | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.398 [0.342, 0.454] |
-| bound_y | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.324 [0.266, 0.383] |
+| policy | ranking (best first) | gap winner vs runner-up [95% CI] | verdict |
+|---|---|---|---|
+| ocp | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.383 [0.325, 0.440] | E2M3 |
+| ceil | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.465 [0.404, 0.525] | E2M3 |
+| opt | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.361 [0.304, 0.413] | E2M3 |
+| opt_wide | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.361 [0.304, 0.413] | E2M3 |
+| oracle_w | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.361 [0.304, 0.413] | E2M3 |
+| model | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.350 [0.294, 0.403] | E2M3 |
+| opt_out | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.357 [0.300, 0.410] | E2M3 |
+| oracle_y | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.398 [0.342, 0.454] | E2M3 |
+| bound_y | E2M3 < BFP6 16|4|5 < MXINT6 < E3M2 < E4M1 | 0.324 [0.266, 0.383] | E2M3 |
 
 Gain of each search over the class rule, per format: ocp minus policy, held-out Y error in % points [95% CI]. Positive = the search helps.
 
@@ -141,25 +140,25 @@ Relative gain of opt over ocp (all X_cal): E3M2 3.7%, E2M3 0.7%, E4M1 8.2%, MXIN
 
 ### 2c. Where the weight error comes from (dataset C)
 
-Share of the squared weight error from clipped (saturated) elements, from non-zero weights flushed to 0, and from ordinary rounding; counts of saturated / zeroed weights out of 10000.
+Share of the squared weight error from out-of-range (clipped) elements, from non-zero weights flushed to 0, and from ordinary rounding. Counts out of 10000 weights, with the Lecture 19 definitions used by formats.py v2: 'range' = |w|/scale beyond vmax before rounding; 'saturated' = the rounded value is beyond vmax, so saturation changed it (a value just above vmax that rounds back to vmax is in the first count only).
 
-| format | policy | clip | zero | round | n saturated | n zeroed | W rel err % |
-|---|---|---|---|---|---|---|---|
-| E3M2 | ocp | 10.8% | 0.0% | 89.2% | 96 | 66 | 5.421 |
-| E3M2 | ceil | 0.0% | 0.0% | 100.0% | 0 | 75 | 5.208 |
-| E3M2 | opt | 1.5% | 0.0% | 98.5% | 42 | 71 | 5.208 |
-| E2M3 | ocp | 3.8% | 2.4% | 93.8% | 43 | 461 | 3.082 |
-| E2M3 | ceil | 0.0% | 2.8% | 97.2% | 0 | 485 | 3.100 |
-| E2M3 | opt | 1.3% | 2.6% | 96.0% | 29 | 471 | 3.062 |
-| E4M1 | ocp | 24.5% | 0.0% | 75.5% | 245 | 1 | 11.051 |
-| E4M1 | ceil | 0.0% | 0.0% | 100.0% | 0 | 1 | 10.111 |
-| E4M1 | opt | 3.7% | 0.0% | 96.3% | 104 | 1 | 10.111 |
-| MXINT6 | ocp | 0.2% | 10.6% | 89.1% | 20 | 891 | 4.025 |
-| MXINT6 | ceil | 0.0% | 10.6% | 89.4% | 0 | 905 | 4.136 |
-| MXINT6 | opt | 5.7% | 9.8% | 84.5% | 53 | 848 | 3.874 |
-| BFP6 16|4|5 | ocp | 0.5% | 9.5% | 90.1% | 33 | 748 | 3.429 |
-| BFP6 16|4|5 | ceil | 0.0% | 9.5% | 90.5% | 0 | 765 | 3.530 |
-| BFP6 16|4|5 | opt | 5.5% | 8.8% | 85.7% | 68 | 721 | 3.368 |
+| format | policy | clip | zero | round | n range | n saturated | n zeroed | W rel err % |
+|---|---|---|---|---|---|---|---|---|
+| E3M2 | ocp | 10.8% | 0.0% | 89.2% | 96 | 43 | 66 | 5.421 |
+| E3M2 | ceil | 0.0% | 0.0% | 100.0% | 0 | 0 | 75 | 5.208 |
+| E3M2 | opt | 1.5% | 0.0% | 98.5% | 42 | 0 | 71 | 5.208 |
+| E2M3 | ocp | 3.8% | 2.4% | 93.8% | 43 | 20 | 461 | 3.082 |
+| E2M3 | ceil | 0.0% | 2.8% | 97.2% | 0 | 0 | 485 | 3.100 |
+| E2M3 | opt | 1.3% | 2.6% | 96.0% | 29 | 7 | 471 | 3.062 |
+| E4M1 | ocp | 24.5% | 0.0% | 75.5% | 245 | 96 | 1 | 11.051 |
+| E4M1 | ceil | 0.0% | 0.0% | 100.0% | 0 | 0 | 1 | 10.111 |
+| E4M1 | opt | 3.7% | 0.0% | 96.3% | 104 | 0 | 1 | 10.111 |
+| MXINT6 | ocp | 0.2% | 10.6% | 89.1% | 20 | 8 | 891 | 4.025 |
+| MXINT6 | ceil | 0.0% | 10.6% | 89.4% | 0 | 0 | 905 | 4.136 |
+| MXINT6 | opt | 5.7% | 9.8% | 84.5% | 53 | 38 | 848 | 3.874 |
+| BFP6 16|4|5 | ocp | 0.5% | 9.5% | 90.1% | 33 | 10 | 748 | 3.429 |
+| BFP6 16|4|5 | ceil | 0.0% | 9.5% | 90.5% | 0 | 0 | 765 | 3.530 |
+| BFP6 16|4|5 | opt | 5.5% | 8.8% | 85.7% | 68 | 43 | 721 | 3.368 |
 
 ### 2d. Blocks the class rule clips: is one exponent up worth it? (dataset C)
 

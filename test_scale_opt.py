@@ -17,14 +17,16 @@ ALL = list(S.FMTS) + list(S.VARIANTS)
 
 # ---------------------------------------------------------------- grids and rounding
 def test_grid_limits():
-    expect = {"MXFP6_E3M2": (32, 28.0, 2 ** -4), "MXFP6_E2M3": (32, 7.5, 2 ** -3),
-              "MXFP6_E4M1": (32, 384.0, 2 ** -7), "MXINT6": (32, 31 / 16, 2 ** -4),
-              "BFP6": (32, 31 / 16, 2 ** -4), "MXFP6_E4M1_v192": (30, 192.0, 2 ** -7),
-              "MXFP6_E4M1_nan256": (31, 256.0, 2 ** -7)}
-    for n, (size, vmax, smallest) in expect.items():
-        g = S.spec(n).grid
-        assert len(g) == size and g[-1] == vmax and g[1] == smallest, n
-        assert np.all(np.diff(g) > 0), n
+    expect = {"MXFP6_E3M2": (32, 28.0, 2 ** -4, 32.0), "MXFP6_E2M3": (32, 7.5, 2 ** -3, 8.0),
+              "MXFP6_E4M1": (32, 384.0, 2 ** -7, 512.0), "MXINT6": (32, 31 / 16, 2 ** -4, 2.0),
+              "BFP6": (32, 31 / 16, 2 ** -4, 2.0), "MXFP6_E4M1_v192": (30, 192.0, 2 ** -7, 256.0),
+              "MXFP6_E4M1_nan1": (31, 256.0, 2 ** -7, 384.0)}
+    for n, (size, vmax, smallest, nxt) in expect.items():
+        f = S.spec(n)
+        assert len(f.grid) == size and f.grid[-1] == vmax and f.grid[1] == smallest and f.nxt == nxt, n
+        assert np.all(np.diff(f.grid) > 0), n
+    tc = S.spec("MXINT6_tc")
+    assert tc.grid[-1] == 31 / 16 and tc.grid_neg[-1] == 2.0 and tc.nxt_neg == 33 / 16
 
 
 def test_vmax_ratio_below_two():
@@ -43,6 +45,41 @@ def test_rne_ties_and_saturation():
     k = S.round_to_grid((np.arange(-63, 64) + 0.5) / 16, S.spec("MXINT6").grid) * 16
     assert np.all((k % 2 == 0) | (np.abs(k) == 31))           # ties to even codes or saturated
     assert k.min() == -31 and k.max() == 31
+
+
+def test_range_vs_saturated():
+    # E2M3 at scale 1 (vmax 7.5, next value 8): 7.6 is out of range but rounds back to 7.5;
+    # 7.75 is a tie that goes to the even code 8, beyond vmax, so saturation changes it
+    f = S.spec("MXFP6_E2M3")
+    v = np.array([7.5, 7.6, 7.7, 7.75, 9.0, -7.75])
+    assert list(S.out_of_range(f, v)) == [False, True, True, True, True, True]
+    assert list(S.saturated(f, v)) == [False, False, False, True, True, True]
+    k = np.array([31.0, 31.4, 31.5, 40.0]) / 16                 # MXINT6: 31.5 ties to 32
+    assert list(S.saturated(S.spec("MXINT6"), k)) == [False, False, True, True]
+    # one-NaN E4M1 (vmax 256 = 1.0 * 2^8): the next code would be 384, so 300 is not saturated
+    assert list(S.saturated(S.spec("MXFP6_E4M1_nan1"), np.array([300.0, 330.0]))) == [False, True]
+
+
+def test_twos_complement():
+    tc, sym = S.spec("MXINT6_tc"), S.spec("MXINT6")
+    v = np.array([-32.5, -32.0, -31.6, 31.6, 32.0]) / 16
+    assert list(S.round_elem(tc, v) * 16) == [-32, -32, -32, 31, 31]
+    assert list(S.round_elem(sym, v) * 16) == [-31, -31, -31, 31, 31]
+    assert list(S.saturated(tc, v)) == [False, False, False, True, True]
+    # a negative block max of 1.98: fits the -32 code at e_ocp = 0, so "ceil" keeps 0 for
+    # two's complement but moves symmetric MXINT6 up to 1
+    W = np.array([[-1.98, 0.5, 0.25]])
+    assert S.quantize(W, "MXINT6_tc", "ceil")[1][0, 0] == 0
+    assert S.quantize(W, "MXINT6", "ceil")[1][0, 0] == 1
+
+
+def test_search_starts_from_the_clamped_exponent():
+    # BFP6 block max 2^-10: the class rule wants E = -10, the 4-bit field stores -8, and the
+    # search tries -8 + {-2..+1} clamped to the field, i.e. -8 and -7
+    f = S.spec("BFP6")
+    c = S.candidates(f, np.array([-10]), S._preferred(S.OPT_WINDOW))
+    assert sorted(set(c[0])) == [-8, -7]
+    assert sorted(set(S.candidates(f, np.array([12]), S._preferred(S.OPT_WINDOW))[0])) == [5, 6, 7]
 
 
 def test_floor_log2_exact_near_powers_of_two():
@@ -81,10 +118,11 @@ def test_ceil_is_ocp_or_one_more_and_never_clips():
         e_ocp = S.quantize(W, n, "ocp")[1]
         Wq, e_ceil = S.quantize(W, n, "ceil")
         assert np.all((e_ceil - e_ocp == 0) | (e_ceil - e_ocp == 1)), n
-        assert S.error_parts(W, Wq, e_ceil, n)["n_sat"] == 0, n
-        # exactly the blocks whose max clips at e_ocp move up
-        amax = np.stack([np.abs(W[:, sl]).max(1) for sl in S.block_slices(100, f.block)], 1)
-        assert np.array_equal(e_ceil - e_ocp, (amax > np.ldexp(f.grid[-1], e_ocp)).astype(int)), n
+        parts = S.error_parts(W, Wq, e_ceil, n)
+        assert parts["n_range"] == 0 and parts["n_saturated"] == 0, n
+        if f.grid_neg is None:                      # exactly the blocks whose max clips at e_ocp move up
+            amax = np.stack([np.abs(W[:, sl]).max(1) for sl in S.block_slices(100, f.block)], 1)
+            assert np.array_equal(e_ceil - e_ocp, (amax > np.ldexp(f.grid[-1], e_ocp)).astype(int)), n
 
 
 def test_opt_never_worse_than_ocp_or_ceil_per_block():
@@ -134,6 +172,8 @@ def test_zero_block_tail_block_and_clamps():
 def test_sign_symmetry():
     W = rng.laplace(size=(20, 100))
     for n in ALL:
+        if S.spec(n).grid_neg is not None:          # two's complement is asymmetric by design
+            continue
         for pol in ("ocp", "ceil", "opt", "model"):
             assert np.array_equal(S.quantize(-W, n, pol)[0], -S.quantize(W, n, pol)[0]), (n, pol)
 
