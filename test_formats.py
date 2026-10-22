@@ -11,7 +11,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from formats import (FORMATS, VARIANTS, E8M0_MIN, E8M0_MAX, spec, fp_round, int_round,  # noqa: E402
-                     quantize, metrics, storage_bits, exhaustive, ranking, split_X)
+                     quantize, metrics, storage_bits, exhaustive, ranking, split_X, vmax_elem)
 
 FP_NAMES = ["MXFP6_E3M2", "MXFP6_E2M3", "MXFP6_E4M1", "MXFP6_E4M1_v192"]
 ALL = list(FORMATS) + list(VARIANTS)
@@ -120,6 +120,25 @@ def test_just_below_power_of_two():
     assert quantize(row(3.999), "MXFP6_E2M3")[0][0, 0] == 3.75
     Wq, _, st = quantize(row(3.999), "MXFP6_E2M3", policy="ceil", return_stats=True)
     assert Wq[0, 0] == 4.0 and st["n_saturated"] == 0
+
+
+def test_one_ulp_below_power_of_two():
+    # np.floor(np.log2(x)) rounds up here for float64; the scale must still follow the rule
+    for k in range(-10, 12):
+        a = np.nextafter(2.0 ** k, 0)
+        for n in ["MXFP6_E3M2", "MXFP6_E2M3", "MXFP6_E4M1", "MXINT6"]:
+            kind, p, emax = spec(n)
+            e = quantize(row(a), n, policy="ocp")[1][0, 0]
+            assert e == (k - 1) - emax, (n, k, e)
+    # E2M3, block max 8 - ulp: scale 1 (not 2), so the max saturates to 7.5
+    assert quantize(row(np.nextafter(8.0, 0)), "MXFP6_E2M3")[0][0, 0] == 7.5
+    # ceil: a max one ulp above vmax * 2^k must move to the next scale (nothing clipped)
+    for n in ["MXFP6_E2M3", "MXINT6", "BFP6"]:
+        kind, p, _ = spec(n)
+        vm = vmax_elem(kind, p)
+        for k in range(-5, 6):
+            st = quantize(row(np.nextafter(vm * 2.0 ** k, np.inf)), n, policy="ceil", return_stats=True)[2]
+            assert st["n_saturated"] == 0, (n, k)
 
 
 def test_rne_tie_inside_quantize():
