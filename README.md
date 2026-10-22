@@ -11,7 +11,7 @@ Put `W_C.npy` and `X_cal.npy` in `data/` (already included), or pass
 `--data <folder>` to any script.
 
 ## Run
-    python3 test_formats.py         # unit tests for the quantizers (17 tests)
+    python3 test_formats.py         # unit tests for the quantizers (18 tests)
     python3 run_baseline.py         # exhaustive baseline -> results/baseline_C.csv/.json
     python3 validate_predictor.py   # main result: predictor vs brute force, accuracy and cost
     python3 explore.py              # brute-force table, scale search, X_cal split, sensitivity

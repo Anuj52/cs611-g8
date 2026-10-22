@@ -35,7 +35,7 @@ Or from the shell: `python run_baseline.py [--W path --tag A] [--variants]`. It 
 
 ## Tests
 
-`python test_formats.py` runs 17 tests. They check the FP grids bit-exactly, RNE ties, saturation, the zero block, the E8M0 clamp, the tail block of 4, sign symmetry, the policies, storage, the exhaustive harness with its checkpoint, and a regression against the plan's numbers on C.
+`python test_formats.py` runs 18 tests. They check the FP grids bit-exactly, RNE ties, values one ulp below a power of two, saturation, the zero block, the E8M0 clamp, the tail block of 4, sign symmetry, the policies, storage, the exhaustive harness with its checkpoint, and a regression against the plan's numbers on C.
 
 ## Findings for the report (dataset C)
 

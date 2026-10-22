@@ -58,6 +58,17 @@ OPT_OFFSETS = (-2, -1, 0, 1)
 POLICIES = ("ocp", "ceil", "opt")
 
 
+# --------------------------------------------------------------------------- exact log2
+def floor_log2(x):
+    """Exact floor(log2(x)) for x > 0.
+
+    np.floor(np.log2(x)) is wrong for float64 values one ulp below a power of two:
+    log2 rounds up to the integer, e.g. floor(log2(8 - ulp)) gives 3 instead of 2.
+    frexp splits x = m * 2^k with m in [0.5, 1) exactly, so floor(log2 x) = k - 1.
+    """
+    return (np.frexp(x)[1] - 1).astype(np.float64)
+
+
 # --------------------------------------------------------------------------- elements
 def fp_round(v, ebits, mbits, bias, maxval):
     """Round to a sign-magnitude FP grid with subnormals: RNE, then saturate at maxval.
@@ -67,8 +78,7 @@ def fp_round(v, ebits, mbits, bias, maxval):
     """
     a = np.abs(v)
     emin = 1 - bias
-    with np.errstate(divide="ignore"):
-        e = np.floor(np.log2(np.where(a > 0, a, 1.0)))
+    e = floor_log2(np.where(a > 0, a, 1.0))
     e = np.maximum(e, emin)              # below 2^emin: subnormal, fixed spacing
     step = 2.0 ** (e - mbits)
     q = np.round(a / step) * step        # np.round is round-half-to-even
@@ -148,9 +158,14 @@ def default_exp(kind, p, emax, amax, policy=None):
     pos = amax > 0
     safe = np.where(pos, amax, 1.0)
     if policy == "ocp":
-        e = np.floor(np.log2(safe)) - emax
+        e = floor_log2(safe) - emax
     elif policy == "ceil":
-        e = np.ceil(np.log2(safe / vmax_elem(kind, p)))
+        # smallest e with amax / 2^e <= vmax. log2 of the ratio can be off by one
+        # near a power of two, so correct it with exact power-of-two divisions.
+        vmax = vmax_elem(kind, p)
+        e = np.ceil(np.log2(safe / vmax))
+        e = np.where(safe / 2.0 ** e > vmax, e + 1, e)
+        e = np.where(safe / 2.0 ** (e - 1) <= vmax, e - 1, e)
     else:
         raise ValueError(f"default_exp needs policy 'ocp' or 'ceil', got {policy!r}")
     return np.clip(np.where(pos, e, 0.0), E8M0_MIN, E8M0_MAX)
