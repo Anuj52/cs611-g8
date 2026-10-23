@@ -1,37 +1,39 @@
 # Report sections: Conventions and Storage/Overhead (draft, Siddhant)
 
 Source tags: [CLASS] Lecture 19 notebook / board notes, [SPEC] OCP MX v1.0, [OUR DECISION] plan v3 D1–D12.
-**Before submission, open the lecture material and confirm every [CLASS] row yourself.** Tags here come from plan v3; they have not been checked against the notebook by me.
+**Checked against the Lecture 19 notebook on 23 Oct:** ✅ = the notebook says exactly this; ⚠️ = the notebook differs (see the storage note); "board notes" = not in the notebook (MXINT6 and BFP come from the board notes, which have not been checked here).
 
 ## A. Conventions
 
 | Item | Convention | Source |
 |---|---|---|
-| Block axis | Consecutive values along each row of W, the reduction axis of Y = W·X | [CLASS] |
-| MX block size | 32. K = 100 → 3 blocks of 32 + a tail of 4 real values with its own scale (same values as zero-padding; padding never changes a block maximum) | [CLASS], tail scale [OUR DECISION D11] |
-| MX shared scale | 2^e, e stored as E8M0, clamped to [−127, 127]; all-zero block: e = 0 | [CLASS] |
-| Scale rule `ocp` (reported in every table) | e = floor(log2 max\|w\|) − emax_elem | [CLASS] |
-| Scale rule `ceil` | smallest e with max\|w\| ≤ vmax·2^e (nothing clipped) | [CLASS] (suggested follow-up) |
+| Block axis | Consecutive values along each row of W, the reduction axis of Y = W·X (notebook: "along the LAST axis … consecutive input features within each output row") | [CLASS] ✅ |
+| MX block size | 32. K = 100 → 3 blocks of 32 + a tail of 4 real values. The notebook zero-pads the tail to 32; the quantized values are identical; padding is excluded from all statistics | [CLASS] ✅ |
+| MX shared scale | 2^e, e stored as E8M0, clamped to [−127, 127]; all-zero block: e = 0 | [CLASS] ✅ |
+| Scale rule `ocp` (reported in every table) | e = floor(log2 max\|w\|) − emax_elem; the notebook computes floor(log2) exactly with `frexp`, not `log2` | [CLASS] ✅ |
+| Scale rule `ceil` | smallest e with max\|w\| ≤ vmax·2^e (nothing clipped). Notebook: start from `ocp`, add 1 if max/scale > vmax; identical to ours (checked on all 1,600 blocks of W_C × 4 formats) | [CLASS] ✅ (suggested follow-up) |
 | Scale rule `opt` | per block try e_ocp + {−2, −1, 0, +1}, keep lowest squared error; ties: offset closest to 0, then −1, +1, −2 | [OUR DECISION D5] |
-| Element rounding | round to nearest, ties to even; then saturate at ±vmax | [CLASS], [OUR DECISION D7] |
-| Special values | none: no Inf/NaN in FP6 / INT6 / BFP6 elements | [CLASS] |
-| FP subnormals | below 2^emin, fixed spacing 2^(emin−m) | [CLASS] |
-| FP bias | 2^(e−1) − 1, top exponent code finite | [CLASS] for E3M2/E2M3; [OUR DECISION D3] for E4M1 |
-| MXFP6 E3M2 | 1\|3\|2, bias 3, emin −2, emax 4, vmax 28, min subnormal 1/16 | [CLASS] |
-| MXFP6 E2M3 | 1\|2\|3, bias 1, emin 0, emax 2, vmax 7.5, min subnormal 1/8 | [CLASS] |
-| MXFP6 E4M1 | 1\|4\|1, bias 7, emin −6, emax 8, vmax 384, min subnormal 2⁻⁷; no reserved code | [OUR DECISION D3] |
+| Element rounding | round to nearest, ties to even; then saturate at ±vmax | [CLASS] ✅ |
+| Special values | none: no Inf/NaN in FP6 / INT6 / BFP6 elements (notebook FP6/FP4 entries use every code; its FP8 entries do reserve codes: E4M3 vmax 448, E5M2 57344) | [CLASS] ✅ for FP6 |
+| FP subnormals | below 2^emin, fixed spacing 2^(emin−m) | [CLASS] ✅ |
+| FP bias | 2^(e−1) − 1, top exponent code finite | [CLASS] ✅ for E3M2/E2M3/E2M1; [OUR DECISION D3] for E4M1 |
+| MXFP6 E3M2 | 1\|3\|2, bias 3, emin −2, emax 4, vmax 28, min subnormal 1/16 | [CLASS] ✅ |
+| MXFP6 E2M3 | 1\|2\|3, bias 1, emin 0, emax 2, vmax 7.5, min subnormal 1/8 | [CLASS] ✅ |
+| MXFP6 E4M1 | 1\|4\|1, bias 7, emin −6, emax 8, vmax 384, min subnormal 2⁻⁷; no reserved code. Not in the notebook. Support: the notebook's 6- and 4-bit formats reserve no code; its E4M3 (same 4-bit exponent, bias 7, emin −6) does reserve one NaN, which is why the one-NaN row (vmax 256) is reported | [OUR DECISION D3] |
 | E4M1 sensitivity rows | top exponent reserved: vmax 192; one NaN (top exp + mantissa 1): vmax 256 | [OUR DECISION D3] |
-| MXINT6 | S I F F F F: value k·2⁻⁴·2^e, k ∈ [−31, 31] (code −32 never produced), emax_elem = 0 | [CLASS] format, [OUR DECISION D10] range |
-| BFP6 | g\|e\|m = 16\|4\|5: groups of 16 along the row (100 = 6·16 + 4), 4-bit shared exponent clamped to [−8, 7], sign + 5-bit magnitude, value k·2⁻⁴·2^e, k ∈ [−31, 31], e = floor(log2 max\|w\|), RNE | [CLASS] structure, [OUR DECISION D1] parameters |
+| MXINT6 | S I F F F F: value k·2⁻⁴·2^e, k ∈ [−31, 31] (code −32 never produced), emax_elem = 0 | board notes (not in notebook), [OUR DECISION D10] range |
+| BFP6 | g\|e\|m = 16\|4\|5: groups of 16 along the row (100 = 6·16 + 4), 4-bit shared exponent clamped to [−8, 7], sign + 5-bit magnitude, value k·2⁻⁴·2^e, k ∈ [−31, 31], e = floor(log2 max\|w\|), RNE | board notes structure (not in notebook), [OUR DECISION D1] parameters |
 | BFP vs MXINT | BFP 32\|8\|5 with the floor rule is numerically identical to MXINT6 (verified on all 10,000 weights of C); our BFP6 differs through group size and exponent width | [OUR DECISION D1], verified |
-| Quantized operands | W only; X stays FP32. W+X is a secondary experiment | [OUR DECISION D2] |
-| Error arithmetic | FP64; FP32 accumulation changes relative Y error by < 10⁻⁶ relative | [OUR DECISION D8], verified |
+| Quantized operands | W only; X stays FP32. W+X is a secondary experiment (the notebook runs both W-only and W+A, activations blocked along their last axis) | [OUR DECISION D2], consistent with notebook |
+| Error arithmetic | FP64; FP32 accumulation changes relative Y error by ≤ 1.1·10⁻⁷ relative (notebook: FP32 reference with TF32 disabled, error sums in FP64) | [OUR DECISION D8], verified |
 | Primary metric | relative Frobenius error of Y on held-out (odd) columns of X_cal | [OUR DECISION D6] |
 | Selection granularity | one format for the whole matrix | [OUR DECISION D4] |
 
 ## B. Storage
 
 Bits per element include the shared exponent. For a row of K = 100 values (D11: the tail block stores only its real values plus its own exponent):
+
+> ⚠️ **The Lecture 19 notebook counts storage differently.** Its `ideal_weight_size` stores every block in full, padding included: `blocks = rows · ceil(cols/32)`, `bits += blocks · (32·bits + 8)`. For K = 100 that gives **8.00 bits/element for MX formats** (and 7.00 for BFP 16|4|5 by the same rule), not 6.32 / 6.28. D11 (6.32) is therefore [OUR DECISION], not [CLASS]. The report should give both and say which one the equal-budget claims use. Under either accounting all five candidates are compared at the same element width (6 bits) and the C ranking does not depend on it.
 
 | Candidate | element bits | block | exponent bits | blocks/row | bits/row | **bits/element** | long-row limit |
 |---|---|---|---|---|---|---|---|
